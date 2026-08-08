@@ -1,0 +1,33 @@
+# Configuração do Render (Infrastructure as Code).
+# Ao subir este repositório no Render, ele pode ler este arquivo
+# automaticamente ("New +" > "Blueprint") e já criar o serviço configurado.
+#
+# Se preferir configurar manualmente pelo painel do Render, os mesmos
+# valores abaixo (build/start command) devem ser colados nos campos
+# correspondentes ao criar um "Web Service" comum.
+
+services:
+  - type: web
+    name: ndb-dashboard
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # Cadastre os valores reais destas variáveis no painel do Render
+      # (Environment > Add Environment Variable) — não commite os links
+      # de verdade aqui.
+      - key: DROPBOX_URL_PRINCIPAL
+        sync: false
+      - key: DROPBOX_URL_ATR
+        sync: false
+      - key: DROPBOX_URL_CIDADES
+        sync: false
+      - key: DROPBOX_URL_ESTIMATIVAS
+        sync: false
+      - key: DROPBOX_URL_AGR500
+        sync: false
+      - key: DROPBOX_URL_HISTORICO
+        sync: false

@@ -1,0 +1,449 @@
+"""
+views/visao_geral.py — Visão Executiva do Mentor Agro ERP (página padrão).
+Une a antiga Home com o antigo "Colheita Analítico Geral" numa única página,
+no estilo dos modelos de referência (cartões de KPI + gráficos + acesso
+rápido às demais páginas via menu superior).
+"""
+
+import streamlit as st
+import plotly.express as px
+import pandas as pd
+
+from src.data_loader import (
+    get_data,
+    kpi_card,
+    milhar_config,
+    period_delta,
+    get_prod_cities,
+    get_fazenda_city_map,
+    build_mapa_colheita,
+    build_mapa_municipio,
+    get_cidade_uf_map,
+    build_mapa_estado,
+    tch_previsto_realizado_por_estagio,
+)
+from src.weather import render_weather_sidebar
+from src.map_view import render_mapa_municipio, render_mapa_estado
+from src.theme import inject_theme, ACCENT_1, ACCENT_GREEN
+
+inject_theme()
+
+# ---------- CSS dos cartões de KPI (paleta/cores centralizadas em src/theme.py) ----------
+# Layout compacto (para caber em tela 27" sem rolagem) + cards no estilo do
+# painel de referência: cantos arredondados, barra colorida à esquerda por
+# categoria, card "highlight" em gradiente para o indicador principal.
+st.markdown(
+    """
+    <style>
+    .block-container {
+        padding-top: 1.2rem;
+        padding-bottom: 1rem;
+        max-width: 100%;
+    }
+    h1 { font-size: 1.6rem !important; margin-bottom: 0.1rem !important; }
+    h3 { font-size: 0.95rem !important; margin-top: 0.2rem !important; margin-bottom: 0.2rem !important; }
+    .stCaption, [data-testid="stCaptionContainer"] { margin-bottom: 0.3rem !important; }
+    hr { margin: 0.5rem 0 !important; }
+    .kpi-card {
+        background: #121936;
+        border-radius: 12px;
+        padding: 10px 14px;
+        margin-bottom: 8px;
+        border: 1px solid rgba(255,255,255,0.08);
+        border-left: 3px solid var(--kpi-accent, #4F7DF3);
+        box-shadow: 0 3px 10px rgba(0,0,0,0.28);
+        min-height: 76px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 3px;
+        overflow: hidden;
+        transition: transform 0.12s ease-in-out;
+    }
+    .kpi-card:hover {
+        transform: translateY(-1px);
+    }
+    .kpi-card.highlight {
+        background: linear-gradient(135deg, #4F7DF3 0%, #6C5CE7 100%);
+        border-left: none;
+    }
+    .kpi-label {
+        font-size: 10.5px;
+        letter-spacing: 0.3px;
+        text-transform: uppercase;
+        opacity: 0.7;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        line-height: 1.3;
+    }
+    .kpi-value {
+        font-size: 18px;
+        font-weight: 700;
+        line-height: 1.25;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .kpi-delta {
+        font-size: 10px;
+        opacity: 0.9;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        line-height: 1.3;
+    }
+    .kpi-delta.up { color: #3DDC84; }
+    .kpi-delta.down { color: #FF6B6B; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+def render_kpi(col, label, value, delta=None, highlight=False, accent=ACCENT_1):
+    """Renderiza um card de KPI. `accent` só controla a cor da barrinha
+    lateral (puramente visual, agrupando cards por categoria como no painel
+    de referência) — não afeta o valor exibido."""
+    cls = "kpi-card highlight" if highlight else "kpi-card"
+    delta_html = ""
+    if delta:
+        delta_cls = "up" if "▲" in delta else "down" if "▼" in delta else ""
+        delta_html = f'<div class="kpi-delta {delta_cls}">{delta}</div>'
+    with col:
+        st.markdown(
+            f'<div class="{cls}" style="--kpi-accent:{accent};"><div class="kpi-label">{label}</div>'
+            f'<div class="kpi-value">{value}</div>{delta_html}</div>',
+            unsafe_allow_html=True,
+        )
+
+
+# ---------- Barra lateral: fonte de dados + filtros ----------
+st.sidebar.title("🌾 Mentor Agro ERP")
+st.sidebar.caption("Visão Executiva — Colheita, Transporte e Logística")
+
+st.sidebar.markdown("### Fonte de dados")
+uploaded = st.sidebar.file_uploader(
+    "Substituir pelas planilhas do Dropbox (opcional, só nesta sessão)", type=["xlsx"], key="uploader_home"
+)
+if uploaded is not None:
+    st.session_state["uploaded_file"] = uploaded
+    st.sidebar.success("Usando arquivo enviado.")
+else:
+    st.sidebar.caption("Lendo direto do Dropbox.")
+
+data = get_data()
+colheita = data.get("colheita", pd.DataFrame())
+estimativa = data.get("estimativa", pd.DataFrame())
+transporte = data.get("transporte", pd.DataFrame())
+transbordo = data.get("transbordo", pd.DataFrame())
+colhedora = data.get("colhedora", pd.DataFrame())
+disponibilidade = data.get("disponibilidade", pd.DataFrame())
+diesel = data.get("diesel", pd.DataFrame())
+prod = data.get("prod", pd.DataFrame())
+atr = data.get("atr", pd.DataFrame())
+
+# Cidades das unidades produtoras, lidas da aba ESTIMATIVA (coluna
+# Cidade/Município) — alimentam o grid de clima na sidebar. Se a coluna
+# ainda não existir, cai para a cidade padrão (Conceição da Barra).
+cidades_estimativa = get_prod_cities(estimativa)
+
+# Mapa {Fazenda: Cidade} — procurado em COLHEITA, ESTIMATIVA e PROD., o que
+# vier primeiro com a coluna preenchida. Base para os dois níveis de mapa.
+fazenda_city_map = get_fazenda_city_map(colheita, estimativa, prod)
+mapa_colheita_df = build_mapa_colheita(colheita, estimativa, fazenda_city_map)
+mapa_municipio_df = build_mapa_municipio(mapa_colheita_df)
+
+# Mapa {Cidade: UF} da aba CIDADE (se existir) — cruzado com o resultado
+# acima para agregar por ESTADO, que é a visão priorizada no mapa.
+cidade_uf_map = get_cidade_uf_map(data.get("cidade_uf", pd.DataFrame()))
+mapa_estado_df = build_mapa_estado(mapa_colheita_df, cidade_uf_map)
+
+# Clima em grid destacado na sidebar — uma cidade por card.
+render_weather_sidebar(cidades_estimativa)
+
+st.sidebar.markdown("### Filtros — Colheita & Estimativa")
+safras = sorted(set(colheita.get("Safra", pd.Series(dtype=str)).dropna()) | set(estimativa.get("Safra", pd.Series(dtype=str)).dropna()))
+setores = sorted(set(colheita.get("Setor", pd.Series(dtype=str)).dropna()) | set(estimativa.get("Setor", pd.Series(dtype=str)).dropna()))
+variedades = sorted(estimativa["Variedade"].dropna().unique().tolist()) if "Variedade" in estimativa.columns else []
+
+f_safra = st.sidebar.multiselect("Safra", safras, default=safras)
+f_setor = st.sidebar.multiselect("Setor", setores, default=setores)
+f_variedade = st.sidebar.multiselect("Variedade (Estimativa)", variedades, default=variedades)
+
+col_f = colheita[colheita["Safra"].isin(f_safra) & colheita["Setor"].isin(f_setor)] if not colheita.empty else colheita
+est_f = estimativa[estimativa["Safra"].isin(f_safra) & estimativa["Setor"].isin(f_setor)] if not estimativa.empty else estimativa
+if variedades:
+    est_f = est_f[est_f["Variedade"].isin(f_variedade)]
+
+# ---------- Diagnóstico: por que Toneladas/Área/TCH podem aparecer zerados ----------
+# Todos esses KPIs vêm de col_f/est_f (COLHEITA e ESTIMATIVA filtradas). Se a
+# aba não for encontrada no Dropbox (nome mudou) ou faltar uma coluna
+# esperada, os campos ficam em 0 sem erro nenhum — este painel expõe o
+# motivo exato, sem alterar nenhum cálculo do dashboard.
+with st.sidebar.expander("🔍 Diagnóstico — campos zerados (Colheita/Estimativa)"):
+    st.markdown(f"**COLHEITA**: {'✅ encontrada' if not colheita.empty else '❌ vazia ou aba não encontrada'} "
+                f"— {colheita.shape[0]} linhas, {colheita.shape[1]} colunas")
+    if not colheita.empty:
+        st.caption("Colunas: " + ", ".join(colheita.columns.astype(str)))
+
+    st.markdown(f"**ESTIMATIVA**: {'✅ encontrada' if not estimativa.empty else '❌ vazia ou aba não encontrada'} "
+                f"— {estimativa.shape[0]} linhas, {estimativa.shape[1]} colunas")
+    if not estimativa.empty:
+        st.caption("Colunas: " + ", ".join(estimativa.columns.astype(str)))
+
+    esperadas_colheita = ["Safra", "Setor", "Total Área O.S.", "TCH Real", "% Variação TCH", "Data Ultima Entrega"]
+    esperadas_estimativa = ["Safra", "Setor", "Variedade", "Área Estimada", "TCH Estimado", "Ton. Prevista (t)"]
+    if not colheita.empty:
+        faltando_col = [c for c in esperadas_colheita if c not in colheita.columns]
+        if faltando_col:
+            st.error("COLHEITA sem as colunas esperadas: " + ", ".join(faltando_col))
+    if not estimativa.empty:
+        faltando_est = [c for c in esperadas_estimativa if c not in estimativa.columns]
+        if faltando_est:
+            st.error("ESTIMATIVA sem as colunas esperadas: " + ", ".join(faltando_est))
+
+    st.divider()
+    st.markdown(f"**Após o filtro atual** (Safra={f_safra}, Setor={f_setor}):")
+    st.write(f"col_f (Colheita filtrada): {len(col_f)} linhas — est_f (Estimativa filtrada): {len(est_f)} linhas")
+    if not colheita.empty and "Safra" in colheita.columns:
+        st.caption(f"Safra únicos em COLHEITA: {sorted(colheita['Safra'].dropna().unique().tolist(), key=str)}")
+    if not colheita.empty and "Setor" in colheita.columns:
+        st.caption(f"Setor únicos em COLHEITA: {sorted(colheita['Setor'].dropna().astype(str).unique().tolist())}")
+    if not estimativa.empty and "Safra" in estimativa.columns:
+        st.caption(f"Safra únicos em ESTIMATIVA: {sorted(estimativa['Safra'].dropna().unique().tolist(), key=str)}")
+    if not estimativa.empty and "Setor" in estimativa.columns:
+        st.caption(f"Setor únicos em ESTIMATIVA: {sorted(estimativa['Setor'].dropna().astype(str).unique().tolist())}")
+
+titulo_col, filtro_col = st.columns([2.2, 1])
+with titulo_col:
+    st.title("Visão Executiva da Safra")
+    st.caption("Colheita Analítico Geral + panorama de Transporte, Transbordo, Colhedoras e Disponibilidade em uma única tela.")
+with filtro_col:
+    resumo_safra = ", ".join(f_safra) if f_safra and len(f_safra) < len(safras) else "Todas"
+    resumo_setor = ", ".join(f_setor) if f_setor and len(f_setor) < len(setores) else "Todos"
+    st.markdown(
+        f"""
+        <div style="text-align:right;margin-top:1.2rem;font-size:12px;opacity:0.75;line-height:1.6;">
+            <b>Safra:</b> {resumo_safra}<br>
+            <b>Setor:</b> {resumo_setor}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# ==========================================================================
+# BLOCO 1 — KPIs principais (Área Estimada/TCH da ESTIMATIVA; Área Colhida/
+#            % Variação TCH da COLHEITA — Total Área O.S.), 3 casas decimais.
+# ==========================================================================
+area_estimada = est_f["Área Estimada"].sum() if not est_f.empty else 0
+# Toneladas de Cana: soma da coluna "Ton. Prevista (t)" da aba de Estimativas
+# (BASE-ESTIMATIVAS) — pedido explícito, substitui a soma antiga por
+# Colhedora.
+ton_colhida = est_f["Ton. Prevista (t)"].sum() if not est_f.empty and "Ton. Prevista (t)" in est_f.columns else 0
+area_colhida = col_f["Total Área O.S."].sum() if not col_f.empty else 0
+pct_colhida = (area_colhida / area_estimada * 100) if area_estimada else 0
+tch_estimado_medio = est_f["TCH Estimado"].mean() if not est_f.empty else 0
+tch_real_colheita = col_f["TCH Real"].mean() if not col_f.empty else 0
+pct_variacao_tch = col_f["% Variação TCH"].mean() if not col_f.empty else 0
+ton_transportada = transporte["Toneladas"].sum() if not transporte.empty else 0
+atr_medio = atr["ATR"].mean() if not atr.empty and "ATR" in atr.columns else 0
+
+# ---------- Deltas (período atual vs período anterior) só onde há data real ----------
+# Estimativa/Área Estimada/TCH Estimado não têm coluna de data -> sem delta (não inventamos comparação).
+# Talhões com TCH Real = 0 estão "Em Processo de Pesagem" (não finalizados) -> excluídos do delta de TCH,
+# senão a média fica distorcida por registros pendentes, não por queda real de produtividade.
+col_f_tch = col_f[col_f["TCH Real"] > 0] if not col_f.empty else col_f
+delta_area_colhida = period_delta(col_f, "Data Ultima Entrega", "Total Área O.S.", agg="sum")
+delta_tch_real = period_delta(col_f_tch, "Data Ultima Entrega", "TCH Real", agg="mean")
+delta_pct_var = period_delta(col_f_tch, "Data Ultima Entrega", "% Variação TCH", agg="mean", mode="abs_diff")
+delta_ton_transp = period_delta(transporte, "Data", "Toneladas", agg="sum")
+delta_atr = period_delta(atr, "Data Produção", "ATR", agg="mean") if "ATR" in atr.columns else None
+
+r1 = st.columns(8)
+render_kpi(r1[0], "Toneladas de Cana (t)", f"{ton_colhida:,.0f}", highlight=True)
+render_kpi(r1[1], "Área Estimada (ha)", f"{area_estimada:,.3f}")
+render_kpi(r1[2], "Área Colhida (ha)", f"{area_colhida:,.3f}", delta=delta_area_colhida)
+render_kpi(r1[3], "TCH Estimado", f"{tch_estimado_medio:,.3f}")
+render_kpi(r1[4], "% Variação TCH", f"{pct_variacao_tch:,.3f}%", delta=delta_pct_var)
+render_kpi(r1[5], "Ton. Transportadas", f"{ton_transportada:,.0f} t", delta=delta_ton_transp)
+render_kpi(r1[6], "TCH Real (Colheita)", f"{tch_real_colheita:,.3f}", delta=delta_tch_real)
+render_kpi(r1[7], "ATR Médio (kg/t)", f"{atr_medio:,.2f}" if atr_medio > 0 else "—", delta=delta_atr)
+
+# ---------- KPIs operacionais (Colhedora, Transbordo, Transporte) ----------
+colhedoras_ativas = colhedora[colhedora["FRENTE"] != "BASE"]["Frota"].nunique() if not colhedora.empty else 0
+transbordo_ativas = transbordo[transbordo["Frente"] != "BASE"]["Frota"].nunique() if not transbordo.empty else 0
+distancia_media = transporte["Distancia Média"].mean() if not transporte.empty else 0
+ton_viagem_media = transporte["Toneladas por viagem"].mean() if not transporte.empty else 0
+media_carga_colhedora = colhedora["Média Carga"].mean() if not colhedora.empty else 0
+media_carga_transbordo = transbordo["Média Carga"].mean() if not transbordo.empty else 0
+lt_ton_colhedora = diesel[diesel["TIPO"].str.upper() == "COLHEDORA"]["Lt/ton"].mean() if not diesel.empty else 0
+lt_ton_transbordo = diesel[diesel["TIPO"].str.upper() == "TRANSBORDO"]["Lt/ton"].mean() if not diesel.empty else 0
+
+delta_distancia = period_delta(transporte, "Data", "Distancia Média", agg="mean")
+delta_ton_viagem = period_delta(transporte, "Data", "Toneladas por viagem", agg="mean")
+
+r2 = st.columns(7)
+render_kpi(r2[0], "Disponibilidade Média", f"{disponibilidade['Disponibilidade Mecânica'].mean()*100:,.1f}%" if not disponibilidade.empty else "—", accent=ACCENT_GREEN)
+render_kpi(r2[1], "Distância Média (km)", f"{distancia_media:,.2f}", delta=delta_distancia, accent=ACCENT_GREEN)
+render_kpi(r2[2], "Ton./Viagem Média", f"{ton_viagem_media:,.2f}", delta=delta_ton_viagem, accent=ACCENT_GREEN)
+render_kpi(r2[3], "Colhedoras Ativas", f"{colhedoras_ativas:,}", accent=ACCENT_GREEN)
+render_kpi(r2[4], "Transbordo Ativas", f"{transbordo_ativas:,}", accent=ACCENT_GREEN)
+render_kpi(r2[5], "Lts/Ton. Colhedoras", f"{lt_ton_colhedora:,.3f}" if lt_ton_colhedora > 0 else "—", accent=ACCENT_GREEN)
+render_kpi(r2[6], "Lts/Ton. Transbordos", f"{lt_ton_transbordo:,.3f}" if lt_ton_transbordo > 0 else "—", accent=ACCENT_GREEN)
+
+# ==========================================================================
+# BLOCO 1.5 — Mapa: Toneladas Colhidas x Área Estimada
+# Prioriza a visão por ESTADO (aba CIDADE x ESTIMATIVA); só cai para o mapa
+# por fazenda/cidade se a aba CIDADE ainda não existir ou não achar UF.
+# ==========================================================================
+if not mapa_estado_df.empty:
+    render_mapa_estado(mapa_estado_df)
+else:
+    render_mapa_municipio(mapa_municipio_df)
+
+CHART_H = 220  # altura padrão de todos os gráficos, para manter tudo harmônico
+
+# ==========================================================================
+# BLOCO 2 — Grade compacta 3x2 de gráficos
+# ==========================================================================
+c1, c2, c3 = st.columns(3)
+
+with c1:
+    st.subheader("Produção (t): Estimada vs Realizada")
+    if not prod.empty and not col_f.empty and "Produção (TON)" in prod.columns:
+        prod_estimada = prod["Produção (TON)"].sum()
+        prod_realizada = col_f["Prod. Real"].sum()
+        comp_df = pd.DataFrame({"Categoria": ["Estimada", "Realizada"], "Toneladas": [prod_estimada, prod_realizada]})
+        fig = px.pie(comp_df, names="Categoria", values="Toneladas", hole=0.5, template="plotly_dark")
+        fig.update_traces(textinfo="percent+label", textfont_size=12)
+        fig.update_layout(height=CHART_H, margin=dict(t=5, b=5, l=5, r=5), showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Aguardando aba PROD na planilha (ver observação).")
+
+with c2:
+    st.subheader("Toneladas Transportadas / Dia")
+    if not transporte.empty:
+        diario = transporte.groupby("Data", as_index=False)["Toneladas"].sum()
+        fig = px.area(diario, x="Data", y="Toneladas", template="plotly_dark")
+        fig.update_layout(height=CHART_H, margin=dict(t=5, b=5, l=5, r=5))
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Sem dados de transporte.")
+
+with c3:
+    st.subheader("TCH Real x Estimado por Setor")
+    if not col_f.empty and not est_f.empty:
+        g_col2 = col_f.groupby("Setor", as_index=False)["TCH Real"].mean().rename(columns={"TCH Real": "TCH Real (Colheita)"})
+        g_est2 = est_f.groupby("Setor", as_index=False)["TCH Estimado"].mean()
+        g_merge = g_col2.merge(g_est2, on="Setor", how="outer")
+        fig2 = px.bar(g_merge, x="Setor", y=["TCH Estimado", "TCH Real (Colheita)"], barmode="group", text_auto=".1f", template="plotly_dark")
+        fig2.update_traces(textposition="outside")
+        fig2.update_layout(height=CHART_H, margin=dict(t=5, b=5, l=5, r=5), legend_title="", legend=dict(orientation="h", y=1.15))
+        st.plotly_chart(fig2, use_container_width=True)
+    else:
+        st.info("Dados insuficientes.")
+
+c4, c6 = st.columns(2)
+
+with c4:
+    st.subheader("Toneladas (t) por Frente")
+    if not colhedora.empty:
+        g_colh = colhedora.groupby("FRENTE", as_index=False)["Toneladas"].sum().rename(columns={"FRENTE": "Frente"})
+        g_colh = g_colh.sort_values("Toneladas", ascending=False)
+        fig4 = px.bar(g_colh, x="Frente", y="Toneladas", text_auto=",.0f", template="plotly_dark")
+        fig4.update_traces(textposition="outside")
+        fig4.update_layout(height=CHART_H, margin=dict(t=5, b=5, l=5, r=5))
+        st.plotly_chart(fig4, use_container_width=True)
+    else:
+        st.info("Sem dados de Colhedora.")
+
+with c6:
+    st.subheader("Produção Real por Estágio")
+    if not prod.empty and "Estágio da Cultura" in prod.columns and "SETOR" in prod.columns:
+        prod_f = prod[prod["SETOR"].isin(f_setor) & prod["Produção Real (TON)"].notna()]
+        if not prod_f.empty:
+            g_var = prod_f.groupby(["Estágio da Cultura", "SETOR"], as_index=False)["Produção Real (TON)"].sum()
+            g_real_var = g_var.pivot_table(index="Estágio da Cultura", columns="SETOR", values="Produção Real (TON)").reset_index()
+            fig_var = px.line(g_real_var, x="Estágio da Cultura", y=g_real_var.columns.difference(["Estágio da Cultura"]), markers=True, template="plotly_dark")
+            fig_var.update_layout(height=CHART_H, margin=dict(t=5, b=5, l=5, r=5), legend_title="", legend=dict(orientation="h", y=1.15))
+            st.plotly_chart(fig_var, use_container_width=True)
+        else:
+            st.info("Dados insuficientes para este gráfico.")
+    else:
+        st.info("Aguardando aba PROD na planilha (ver observação).")
+
+# ==========================================================================
+# BLOCO 2.5 — Realizado e Previsto
+# ==========================================================================
+st.subheader("Realizado e Previsto")
+tch_estagio_df = tch_previsto_realizado_por_estagio(prod)
+if not tch_estagio_df.empty:
+    value_cols_estagio = [c for c in ["TCH Previsto", "TCH Realizado"] if c in tch_estagio_df.columns]
+    fig_estagio = px.bar(
+        tch_estagio_df, x="Estágio da Cultura", y=value_cols_estagio,
+        barmode="group", text_auto=".1f", template="plotly_dark",
+    )
+    fig_estagio.update_traces(textposition="outside")
+    fig_estagio.update_layout(
+        height=CHART_H, margin=dict(t=5, b=5, l=5, r=5),
+        legend_title="", legend=dict(orientation="h", y=1.15),
+        title_text="TCH Previsto e Realizado por Estágio",
+    )
+    st.plotly_chart(fig_estagio, use_container_width=True)
+else:
+    st.info(
+        "Aguardando confirmação das colunas de TCH Previsto/Realizado por Estágio na "
+        "aba AGR500 (ver ESTAGIO_CANDIDATES/TCH_PREVISTO_CANDIDATES/TCH_REALIZADO_CANDIDATES "
+        "em src/data_loader.py)."
+    )
+
+# ---------- Consumo Lts/Ton — Colhedoras: barras verticais, full-width ----------
+# Full-width porque são muitos equipamentos; rótulos do eixo inclinados para não sobrepor.
+st.subheader("Consumo Lts/Ton — Colhedoras (todos os equipamentos vs. média geral)")
+if not diesel.empty and "TIPO" in diesel.columns:
+    disel_colh = diesel[diesel["TIPO"].str.upper() == "COLHEDORA"].copy()
+    if not disel_colh.empty:
+        media_geral = disel_colh["Lt/ton"].mean()
+        g_colh_diesel = disel_colh.groupby("Equip.", as_index=False)["Lt/ton"].mean()
+        g_colh_diesel = g_colh_diesel.sort_values("Lt/ton", ascending=False)
+        fig5 = px.bar(g_colh_diesel, x="Equip.", y="Lt/ton", text="Lt/ton", template="plotly_dark")
+        fig5.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+        fig5.add_hline(
+            y=media_geral, line_dash="dash", line_color="#3DDC84",
+            annotation_text=f"Média geral: {media_geral:.2f} Lt/ton", annotation_position="top left",
+            annotation_font_color="#3DDC84",
+        )
+        fig5.update_layout(
+            height=320, margin=dict(t=10, b=5, l=5, r=5),
+            xaxis_type="category", xaxis_title="", yaxis_title="Lt/ton",
+        )
+        fig5.update_xaxes(tickangle=-45)
+        st.plotly_chart(fig5, use_container_width=True)
+    else:
+        st.info("Sem dados de diesel para colhedoras.")
+else:
+    st.info("Sem dados de diesel.")
+
+# ==========================================================================
+# BLOCO 3 — Top 10 Fazendas (com barra de progresso) — meia página
+# ==========================================================================
+t1, _ = st.columns(2)
+with t1:
+    st.subheader("Top 10 Fazendas — Melhor TCH Real (Estimativa)")
+    if not est_f.empty:
+        tch_max_ref = est_f["TCH Real"].max() if est_f["TCH Real"].notna().any() else 100
+        top10 = est_f.groupby("Fazenda", as_index=False)["TCH Real"].mean()
+        top10 = top10.sort_values("TCH Real", ascending=False).head(10)
+        st.dataframe(
+            top10, use_container_width=True, hide_index=True, height=280,
+            column_config={
+                "TCH Real": st.column_config.ProgressColumn(
+                    "TCH Real", format="%.3f", min_value=0, max_value=float(tch_max_ref),
+                ),
+            },
+        )
+    else:
+        st.info("Sem dados de estimativa.")
+
