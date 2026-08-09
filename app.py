@@ -29,13 +29,19 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parent))
 
+from src.auth import exigir_login
+
+# Bloqueia o app até o usuário fazer login — precisa vir antes de
+# qualquer página ser montada/renderizada.
+exigir_login()
+
 pages = [
     st.Page("views/visao_geral.py", title="Visão Geral", icon="📊", url_path="visao-geral", default=True),
     st.Page("pages/transporte.py", title="Transporte", icon="🚛", url_path="transporte"),
-    st.Page("pages/transbordo.py", title="Transbordo", icon="🚜", url_path="transbordo"),
-    st.Page("pages/colhedoras.py", title="Colhedoras", icon="🚜", url_path="colhedoras"),
+    st.Page("pages/transbordo.py", title="Transbordo", icon="🔄", url_path="transbordo"),
     st.Page("pages/disponibilidade.py", title="Disponibilidade", icon="⚙️", url_path="disponibilidade"),
     st.Page("pages/diesel.py", title="Diesel", icon="⛽", url_path="diesel"),
+    st.Page("pages/colhedoras.py", title="Colhedoras", icon="🚜", url_path="colhedoras"),
     st.Page("views/historico_safras.py", title="Histórico de Safras", icon="📜", url_path="historico-safras"),
 ]
 
