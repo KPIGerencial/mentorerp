@@ -31,3 +31,11 @@ services:
         sync: false
       - key: DROPBOX_URL_HISTORICO
         sync: false
+      # Login (streamlit-authenticator): cole aqui o mesmo conteúdo de
+      # .streamlit/secrets.toml.example já preenchido com usuários reais.
+      # Alternativa mais robusta: usar "Secret Files" no painel do Render
+      # em vez de variável de ambiente (Settings > Secret Files), criando
+      # um arquivo ".streamlit/secrets.toml" — nesse caso não precisa
+      # desta variável.
+      - key: AUTH_SECRETS_TOML
+        sync: false

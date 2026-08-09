@@ -1,40 +1,12 @@
+# Nunca commitar credenciais reais
+.streamlit/secrets.toml
+
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
-
-# Virtual environments
+*.pyc
 .venv/
-env/
 venv/
-ENV/
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Distribution / packaging
-build/
-dist/
-*.egg-info/
-
-# Jupyter
-.ipynb_checkpoints
-
-# VS Code
-.vscode/
-
-# OS files
+# SO / editor
 .DS_Store
-Thumbs.db
-
-# Streamlit
-.streamlit/
-
-# Data files (optional)
-*.xlsx
-*.xls
-
-# Logs
-logs/
-*.log
+.vscode/

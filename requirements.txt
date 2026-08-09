@@ -1,5 +1,7 @@
-streamlit>=1.46
+streamlit==1.52.2
 pandas>=2.2
 openpyxl>=3.1
 plotly>=5.22
 requests>=2.31
+streamlit-authenticator>=0.4.2
+toml>=0.10
