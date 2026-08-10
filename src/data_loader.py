@@ -269,7 +269,7 @@ def _download_dropbox_bytes(url: str) -> bytes:
     return resp.content
 
 
-def get_data() -> dict:
+def get_data(quiet: bool = False) -> dict:
     """
     Ponto único usado pelas páginas.
     Prioridade: arquivo enviado pelo usuário na sessão (upload manual, feito
@@ -277,6 +277,11 @@ def get_data() -> dict:
     única, um .xlsx por tabela — ver DROPBOX_URLS). Sem fallback para
     arquivo local: se algum link do Dropbox falhar, a página para com uma
     mensagem clara em vez de mostrar dado desatualizado.
+
+    quiet=True: não chama st.error()/st.stop() em caso de falha — em vez
+    disso relança a exceção, para chamadores que precisam de uma tentativa
+    "silenciosa" e não podem travar a página (ex: tela de login, que roda
+    ANTES do usuário entrar e não pode depender da planilha estar no ar).
     """
     uploaded = st.session_state.get("uploaded_file")
     if uploaded is not None:
@@ -302,6 +307,8 @@ def get_data() -> dict:
             if not colheita_hist.empty:
                 data["colheita"] = colheita_hist
     except Exception:
+        if quiet:
+            raise
         st.error(
             "Não foi possível ler uma das planilhas do Dropbox. Verifique se os "
             "links continuam com o compartilhamento público ativo (qualquer "

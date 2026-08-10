@@ -150,6 +150,41 @@ def _city_card_html(cidade: str, dados: dict | None) -> str:
     """
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def get_cidades_login() -> list:
+    """Lista de cidades das unidades produtoras (aba ESTIMATIVA/AGR500) para
+    exibir o clima na TELA DE LOGIN — busca "silenciosa": se a planilha
+    estiver fora do ar, cai para a cidade padrão em vez de travar o login
+    (o login não pode depender da planilha estar acessível)."""
+    try:
+        from src.data_loader import get_data, get_prod_cities
+
+        data = get_data(quiet=True)
+        estimativa = data.get("estimativa", data.get("prod", None))
+        if estimativa is None:
+            return [DEFAULT_CITY]
+        cidades = get_prod_cities(estimativa)
+        return cidades or [DEFAULT_CITY]
+    except Exception:
+        return [DEFAULT_CITY]
+
+
+def render_weather_login_panel(cidades: list | None = None, uf: str = DEFAULT_UF, max_cidades: int = 6):
+    """Grid de previsão do tempo para a ÁREA PRINCIPAL da tela de login
+    (não a sidebar — antes do login a sidebar não deve mostrar nada do
+    dashboard). Mesmo cartão visual usado no grid da sidebar, em 3 colunas."""
+    cidades = (cidades or [DEFAULT_CITY])[:max_cidades]
+    st.markdown(
+        f'<div class="ndb-eyebrow" style="margin-bottom:6px;">🌦️ Previsão do tempo — unidades</div>',
+        unsafe_allow_html=True,
+    )
+    cols = st.columns(3)
+    for i, cidade in enumerate(cidades):
+        dados = get_weather_for_city(cidade, uf)
+        with cols[i % 3]:
+            st.markdown(_city_card_html(cidade, dados), unsafe_allow_html=True)
+
+
 def render_weather_sidebar(cidades: list | None = None, uf: str = DEFAULT_UF):
     """Grid de previsão do tempo BEM destacado na sidebar — 2 colunas de
     cards, um por cidade das unidades produtoras (aba ESTIMATIVA). Cada card
