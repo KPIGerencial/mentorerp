@@ -7,17 +7,17 @@ tabela/grupo de tabelas) — não há nenhuma planilha embutida no projeto.
 ## Estrutura do projeto
 
 ```
-ndb_dashboard/
+Mentor_ERP_dashboard/
 ├── app.py                        # Router: menu no topo (st.navigation position="top")
 ├── views/
 │   ├── visao_geral.py             # Visão Executiva (página padrão)
-│   └── historico_safras.py        # Histórico de Safras (planilha separada, uma aba por ano)
+│   └── Historico_safras.py        # Histórico de Safras (planilha separada, uma aba por ano)
 ├── pages/
-│   ├── transporte.py
-│   ├── transbordo.py
-│   ├── disponibilidade.py
-│   ├── diesel.py
-│   └── colhedoras.py
+│   ├── Transporte.py
+│   ├── Transbordo.py
+│   ├── Disponibilidade.py
+│   ├── Diesel.py
+│   └── Colhedoras.py
 ├── src/
 │   ├── data_loader.py         # Camada única de leitura/cache do Dropbox + helpers
 │   ├── weather.py             # Previsão do tempo (Open-Meteo) — grid na sidebar
