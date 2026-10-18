@@ -184,6 +184,7 @@ def _ler_abas_de_um_workbook(fonte, data: dict) -> None:
             data["cidade_uf"] = _clean_columns(df_cidade).dropna(how="all")
 
 
+@st.cache_data(ttl=600, show_spinner="Carregando planilha...")
 def load_excel(file_bytes_or_path) -> dict:
     """Lê todas as abas relevantes e devolve um dict {nome_logico: DataFrame}.
 
@@ -269,6 +270,28 @@ def _download_dropbox_bytes(url: str) -> bytes:
     return resp.content
 
 
+@st.cache_data(ttl=600, show_spinner="Baixando dados do Dropbox...")
+def _load_dropbox_data() -> dict:
+    """Carrega a fonte principal do Dropbox e devolve o dataset já normalizado.
+
+    Essa função fica cacheada para que cada rerun do Streamlit reaproveite a
+    leitura completa em vez de refazer o download e o parse das planilhas.
+    """
+    data = {}
+    for url in DROPBOX_URLS.values():
+        conteudo = _download_dropbox_bytes(url)
+        for workbook in _extrair_workbooks(conteudo):
+            _ler_abas_de_um_workbook(workbook, data)
+
+    if "colheita" not in data:
+        conteudo_hist = _download_dropbox_bytes(DROPBOX_HISTORICO_URL)
+        colheita_hist = _build_colheita_de_safras(_extrair_workbooks(conteudo_hist))
+        if not colheita_hist.empty:
+            data["colheita"] = colheita_hist
+
+    return _normalizar(data)
+
+
 def get_data(quiet: bool = False) -> dict:
     """
     Ponto único usado pelas páginas.
@@ -287,25 +310,8 @@ def get_data(quiet: bool = False) -> dict:
     if uploaded is not None:
         return load_excel(uploaded.getvalue())
 
-    data = {}
     try:
-        for url in DROPBOX_URLS.values():
-            conteudo = _download_dropbox_bytes(url)
-            for workbook in _extrair_workbooks(conteudo):
-                _ler_abas_de_um_workbook(workbook, data)
-
-        # A aba "COLHEITA" isolada não existe mais na planilha principal — os
-        # dados de colheita agora vivem na planilha de Histórico de Safras
-        # (uma aba por ano: 2026, 2025, 2024...), com as mesmas colunas que a
-        # Visão Geral já espera (Total Área O.S., TCH Real, % Variação TCH,
-        # Data Ultima Entrega...). Só busca aqui se não achou de outro jeito,
-        # reaproveitando o cache de _download_dropbox_bytes (mesma URL que
-        # get_historico_safras() já usa, sem custo extra de rede).
-        if "colheita" not in data:
-            conteudo_hist = _download_dropbox_bytes(DROPBOX_HISTORICO_URL)
-            colheita_hist = _build_colheita_de_safras(_extrair_workbooks(conteudo_hist))
-            if not colheita_hist.empty:
-                data["colheita"] = colheita_hist
+        return _load_dropbox_data()
     except Exception:
         if quiet:
             raise
@@ -316,8 +322,6 @@ def get_data(quiet: bool = False) -> dict:
             "na barra lateral, em 'Fonte de dados'."
         )
         st.stop()
-
-    return _normalizar(data)
 
 
 # Colunas esperadas na página Histórico de Safras (Fazenda | Setor |
